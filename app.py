@@ -1,0 +1,70 @@
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+import os, time, threading
+
+app = Flask(__name__)
+CORS(app)
+
+VIDEO_PATH = os.getenv("VIDEO_PATH", r"C:\video\test.mp4")
+rimas, next_id = [], 1
+def new_rima(name):
+    global next_id
+    rimas.append({"id": next_id, "name": name,
+                  "leader": False, "approved": False})
+    next_id += 1; return next_id-1
+
+@app.route('/rima', methods=['GET','POST'])
+def rima():
+    if request.method == 'POST':
+        return jsonify(ok=True, id=new_rima(request.json.get('name','New Rima')))
+    leaders = sum(r["leader"] for r in rimas)
+    pend    = sum(not r["approved"] for r in rimas)
+    return jsonify(list=rimas, leader=leaders, pending=pend)
+
+@app.route('/rima/<int:rid>/approve', methods=['POST'])
+def approve(rid):
+    for r in rimas:
+        if r["id"]==rid:
+            r["approved"]=True; r["leader"]=True
+            return jsonify(ok=True)
+    return jsonify(ok=False,error="ID not found"),404
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    msg=request.json.get('msg','')
+    return jsonify(reply="GPT-리마: "+msg[::-1])
+
+def _upload(res):
+    try:
+        opt=webdriver.ChromeOptions()
+        opt.add_argument(r'--user-data-dir=C:\selenium\profile')
+        drv=webdriver.Chrome(service=Service(ChromeDriverManager().install()),
+                             options=opt)
+        drv.get("https://studio.youtube.com/")
+        drv.find_element(By.ID,"create-icon").click()
+        drv.find_element(By.XPATH,'//*[@data-title="Upload videos"]').click()
+        time.sleep(2)
+        drv.find_element(By.CSS_SELECTOR,'input[type="file"]').send_keys(VIDEO_PATH)
+        while True:
+            try:
+                bar=drv.find_element(By.CSS_SELECTOR,'#progress-bar')
+                if bar.get_attribute('aria-valuenow')=='100': break
+            except: pass
+            time.sleep(5)
+        res["ok"]=True
+        res["url"]=drv.find_element(By.CSS_SELECTOR,'a.ytcp-video-info').get_attribute('href')
+        drv.quit()
+    except Exception as e:
+        res["ok"]=False; res["error"]=str(e)
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    res={}; threading.Thread(target=_upload,args=(res,)).start()
+    return jsonify(ok=True,status="started")
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT",8080)))
